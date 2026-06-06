@@ -1,35 +1,37 @@
-from pydantic import BaseModel
-
-
-class FlightSchema(BaseModel):
-    id: int
-    flight_no: str
-    airline_code: str
-    airline_name: str
-    origin: str
-    destination: str
-    departure_date: str
-    departure_time: str
-    arrival_date: str
-    arrival_time: str
-    status: str
-    delay_minutes: int
-    delay_reason: str | None = None
-    terminal: str | None = None
-    gate: str | None = None
-    aircraft_type: str | None = None
-    seats_total: int | None = None
-    seats_booked: int | None = None
-    fare_inr: int | None = None
-
-    model_config = {"from_attributes": True}
+from pydantic import BaseModel, Field
 
 
 class SupportQuery(BaseModel):
-    query: str
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Natural-language question about flights, policies, or airline services.",
+        examples=["What is the status of flight SG528?"],
+    )
 
 
 class SupportResponse(BaseModel):
-    answer: str
-    retrieved_flights: list[FlightSchema] = []
-    knowledge_snippet: str | None = None
+    response: str = Field(..., description="Final answer returned to the user.")
+    category: str | None = Field(
+        None,
+        description="Routing category: Need SQL, Non SQL, Out of Context, or Unsupported.",
+    )
+    input_guardrail: str | None = Field(None, description="Input guardrail result (SAFE or UNSAFE).")
+    output_guardrail: str | None = Field(None, description="Output guardrail result (SAFE or UNSAFE).")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "response": "The current status of flight SG528 is Cancelled.",
+                    "category": "Need SQL",
+                    "input_guardrail": "SAFE",
+                    "output_guardrail": "SAFE",
+                }
+            ]
+        }
+    }
+
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., examples=["ok"])
