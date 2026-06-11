@@ -1,19 +1,27 @@
 import re
 from dataclasses import dataclass
 
+try:
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
+except ImportError:  # pragma: no cover
+    APIConnectionError = APITimeoutError = RateLimitError = ()
+
 from .chains import (
     build_input_classifier_chain,
     build_input_guardrail_chain,
     build_output_guardrail_chain,
-    build_rag_chain,
     build_sql_generation_chain,
     get_sql_agent,
     has_llm_credentials,
+    invoke_rag_chain,
 )
+from .clarification import needs_flight_clarification
+from .conversation import build_contextual_query, format_conversation_history
 from .fallback import run_rag_fallback, run_sql_fallback
 from .fallback import summarize_sql_results
 from .query_validation import get_invalid_query_message, get_unsupported_field_message, is_raw_sql_query
 from .sql_executor import execute_sql_query
+from .user_messages import to_polite_input_response, to_polite_output_response
 
 _INPUT_INJECTION_PATTERNS = [
     r"ignore\s+(all\s+)?previous\s+instructions",
@@ -133,6 +141,13 @@ def _normalize_guardrail_result(result: str) -> str:
     return "SAFE"
 
 
+def _is_transient_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
+        return True
+    message = str(exc).lower()
+    return "connection" in message or "rate limit" in message or "timeout" in message
+
+
 def _handle_raw_sql(user_input: str) -> tuple[str, str | None]:
     results = execute_sql_query(user_input)
     if isinstance(results, str):
@@ -140,7 +155,10 @@ def _handle_raw_sql(user_input: str) -> tuple[str, str | None]:
     return summarize_sql_results(user_input, results), user_input
 
 
-def run_flight_query_agent(user_input: str) -> tuple[str, str | None]:
+def run_flight_query_agent(
+    user_input: str,
+    chat_history: str = "No prior conversation.",
+) -> tuple[str, str | None]:
     unsupported = get_unsupported_field_message(user_input)
     if unsupported:
         return unsupported, None
@@ -163,7 +181,8 @@ def run_flight_query_agent(user_input: str) -> tuple[str, str | None]:
                 {
                     "role": "user",
                     "content": (
-                        f"User Question: {user_input}. "
+                        f"{chat_history}\n\n"
+                        f"User Question: {user_input}\n"
                         f"SQL query to use: {sql_query}"
                     ),
                 }
@@ -173,7 +192,11 @@ def run_flight_query_agent(user_input: str) -> tuple[str, str | None]:
     return result["messages"][-1].content, sql_query
 
 
-def process_user_query(query: str) -> QueryResult:
+def process_user_query(
+    query: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> QueryResult:
+    chat_history = format_conversation_history(conversation_history) or "No prior conversation."
     invalid_message = get_invalid_query_message(query)
     if invalid_message:
         return QueryResult(
@@ -186,62 +209,96 @@ def process_user_query(query: str) -> QueryResult:
     rule_input_flag = _rule_based_input_guardrail(query)
     if rule_input_flag:
         return QueryResult(
-            response=f"Your query was flagged: {rule_input_flag}",
+            response=to_polite_input_response(rule_input_flag),
+            category="Safety",
             input_guardrail=rule_input_flag,
+            output_guardrail="SAFE",
         )
 
+    input_check = "SAFE"
     if has_llm_credentials():
-        input_guardrail_chain = build_input_guardrail_chain()
-        input_check = _normalize_guardrail_result(
-            input_guardrail_chain.invoke({"query": query})
-        )
-    else:
-        input_check = "SAFE"
+        try:
+            input_guardrail_chain = build_input_guardrail_chain()
+            input_check = _normalize_guardrail_result(
+                input_guardrail_chain.invoke({"query": query})
+            )
+        except Exception as exc:
+            if not _is_transient_llm_error(exc):
+                raise
 
     if input_check.startswith("UNSAFE"):
         return QueryResult(
-            response=f"Your query was flagged: {input_check}",
+            response=to_polite_input_response(input_check),
+            category="Safety",
             input_guardrail=input_check,
+            output_guardrail="SAFE",
         )
 
+    category = _rule_based_classifier(query)
     if has_llm_credentials():
-        input_classifier_chain = build_input_classifier_chain()
-        category = _normalize_category(input_classifier_chain.invoke({"query": query}))
-    else:
-        category = _rule_based_classifier(query)
+        try:
+            input_classifier_chain = build_input_classifier_chain()
+            category = _normalize_category(input_classifier_chain.invoke({"query": query}))
+        except Exception as exc:
+            if not _is_transient_llm_error(exc):
+                raise
+
+    clarification = needs_flight_clarification(query, category)
+    if clarification:
+        return QueryResult(
+            response=clarification,
+            category="Clarification",
+            input_guardrail=input_check,
+            output_guardrail="SAFE",
+        )
 
     generated_sql = None
     raw_response = ""
 
     if category == "Need SQL":
-        if has_llm_credentials():
-            raw_response, generated_sql = run_flight_query_agent(query)
-        else:
-            raw_response, generated_sql = run_sql_fallback(query)
+        try:
+            if has_llm_credentials():
+                raw_response, generated_sql = run_flight_query_agent(query, chat_history)
+            else:
+                raw_response, generated_sql = run_sql_fallback(query)
+        except Exception as exc:
+            if _is_transient_llm_error(exc):
+                raw_response, generated_sql = run_sql_fallback(query)
+            else:
+                raise
     elif category == "Non SQL":
-        if has_llm_credentials():
-            rag_chain = build_rag_chain()
-            raw_response = rag_chain.invoke(query)
-        else:
-            raw_response = run_rag_fallback(query)
+        try:
+            if has_llm_credentials():
+                raw_response = invoke_rag_chain(query, chat_history)
+            else:
+                raw_response = run_rag_fallback(query)
+        except Exception as exc:
+            if _is_transient_llm_error(exc):
+                raw_response = run_rag_fallback(query)
+            else:
+                raise
     else:
         raw_response = (
-            "I am designed to assist with airline-related queries. "
-            "Please ask me something about flights, policies, or services."
+            "I'm here to help with airline travel questions such as flight status, baggage, "
+            "bookings, and policies. Could you please ask something related to your flight "
+            "or journey?"
         )
 
+    output_check = "SAFE"
     if has_llm_credentials():
-        output_guardrail_chain = build_output_guardrail_chain()
-        output_check = _normalize_guardrail_result(
-            output_guardrail_chain.invoke({"response": raw_response})
-        )
-    else:
-        output_check = "SAFE"
+        try:
+            output_guardrail_chain = build_output_guardrail_chain()
+            output_check = _normalize_guardrail_result(
+                output_guardrail_chain.invoke({"response": raw_response})
+            )
+        except Exception as exc:
+            if not _is_transient_llm_error(exc):
+                raise
 
     if output_check.startswith("UNSAFE"):
         return QueryResult(
-            response=f"Response flagged by output guardrail: {output_check}",
-            category=category,
+            response=to_polite_output_response(output_check),
+            category=category or "Safety",
             input_guardrail=input_check,
             output_guardrail=output_check,
             generated_sql=generated_sql,

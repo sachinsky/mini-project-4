@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text
+from sqlalchemy import Column, DateTime, Integer, String, Text, func
 
 from .database import Base
 
@@ -25,3 +25,17 @@ class Flight(Base):
     seats_total = Column(Integer, nullable=True)
     seats_booked = Column(Integer, nullable=True)
     fare_inr = Column(Integer, nullable=True)
+
+
+class ConversationLog(Base):
+    __tablename__ = "conversation_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    query = Column(Text, nullable=False)
+    normalized_query = Column(String(500), index=True, nullable=False)
+    response = Column(Text, nullable=False)
+    category = Column(String(50), index=True, nullable=True)
+    input_guardrail = Column(String(100), nullable=True)
+    output_guardrail = Column(String(100), nullable=True)
+    session_id = Column(String(64), index=True, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)

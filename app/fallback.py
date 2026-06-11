@@ -145,15 +145,9 @@ def run_sql_fallback(query: str) -> tuple[str, str | None]:
 
 
 def run_rag_fallback(query: str) -> str:
-    from .chains import get_vectorstore
+    from .chains import get_rag_retriever
+    from .rag_utils import build_policy_answer
 
-    retriever = get_vectorstore().as_retriever(search_kwargs={"k": 3})
+    retriever = get_rag_retriever()
     docs = retriever.invoke(query)
-    if not docs:
-        return "I don't have enough policy information to answer that question."
-
-    context = "\n\n".join(doc.page_content for doc in docs)
-    return (
-        "Based on our airline policy documentation:\n\n"
-        f"{context[:1800]}"
-    )
+    return build_policy_answer(docs, query)
