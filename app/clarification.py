@@ -1,20 +1,36 @@
 import re
 
+from .fallback import (
+    _extract_date,
+    _is_next_flight_query,
+    has_sufficient_sql_criteria,
+)
 
-def _has_flight_number(query: str) -> bool:
-    return bool(re.search(r"\b[A-Z]{2,3}\d{1,4}\b", query.upper()))
-
-
-def _has_route(query: str) -> bool:
-    lowered = query.lower()
-    return "from " in lowered and " to " in lowered
+_CLARIFICATION_MARKERS = (
+    "could you please share",
+    "could you clarify",
+    "to find the right flight",
+    "share one of the following",
+    "departing from or arriving to",
+    "departing from** that city",
+    "which flight you are looking for",
+)
 
 
 def _has_date(query: str) -> bool:
-    return bool(
-        re.search(r"\d{4}-\d{2}-\d{2}", query)
-        or re.search(r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", query, re.I)
-    )
+    return _extract_date(query) is not None
+
+
+def _has_city_only_reference(query: str) -> bool:
+    lowered = query.lower()
+    if _is_next_flight_query(query):
+        return False
+    return bool(re.search(r"\b(?:for|at|in)\s+[a-zA-Z]+\b", lowered))
+
+
+def is_clarification_response(content: str) -> bool:
+    lowered = content.lower()
+    return any(marker in lowered for marker in _CLARIFICATION_MARKERS)
 
 
 def needs_flight_clarification(query: str, category: str) -> str | None:
@@ -22,23 +38,18 @@ def needs_flight_clarification(query: str, category: str) -> str | None:
     if category != "Need SQL":
         return None
 
-    if _has_flight_number(query) or _has_route(query):
+    if has_sufficient_sql_criteria(query):
         return None
 
-    lowered = query.lower()
-    vague_patterns = [
-        "my flight",
-        "flight status",
-        "is it delayed",
-        "is my flight",
-        "check my flight",
-        "when does it depart",
-        "what gate",
-        "seat availability",
-        "available seats",
-    ]
-    if not any(pattern in lowered for pattern in vague_patterns):
-        return None
+    if _has_city_only_reference(query):
+        return (
+            "I'd like to help with that. Could you clarify whether you mean flights "
+            "**departing from** that city or **arriving to** it?\n\n"
+            "Please also share any of these if you have them:\n"
+            "1. **Destination or origin city** (e.g., Delhi to Mumbai)\n"
+            "2. **Travel date** (e.g., 2026-11-11)\n"
+            "3. Or your **flight number** (e.g., SG528)"
+        )
 
     details = [
         "1. Your **flight number** (e.g., SG528)",

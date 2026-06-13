@@ -16,9 +16,9 @@ from .chains import (
     invoke_rag_chain,
 )
 from .clarification import needs_flight_clarification
-from .conversation import build_contextual_query, format_conversation_history
-from .fallback import run_rag_fallback, run_sql_fallback
-from .fallback import summarize_sql_results
+from .conversation import format_conversation_history, resolve_effective_query
+from .fallback import run_rag_fallback, run_sql_fallback, summarize_sql_results
+from .fallback import generate_sql_fallback
 from .query_validation import get_invalid_query_message, get_unsupported_field_message, is_raw_sql_query
 from .sql_executor import execute_sql_query
 from .user_messages import to_polite_input_response, to_polite_output_response
@@ -172,7 +172,19 @@ def run_flight_query_agent(
 
     preview = execute_sql_query(sql_query)
     if isinstance(preview, str) and preview.startswith("Error executing query:"):
-        return preview.replace("Error executing query: ", ""), sql_query
+        fallback_sql = generate_sql_fallback(user_input)
+        if fallback_sql:
+            fallback_preview = execute_sql_query(fallback_sql)
+            if not (
+                isinstance(fallback_preview, str)
+                and fallback_preview.startswith("Error executing query:")
+            ):
+                sql_query = fallback_sql
+                preview = fallback_preview
+            else:
+                return preview.replace("Error executing query: ", ""), sql_query
+        else:
+            return preview.replace("Error executing query: ", ""), sql_query
 
     agent = get_sql_agent()
     result = agent.invoke(
@@ -196,6 +208,9 @@ def process_user_query(
     query: str,
     conversation_history: list[dict[str, str]] | None = None,
 ) -> QueryResult:
+    effective_query, _is_clarification_follow_up = resolve_effective_query(
+        query, conversation_history
+    )
     chat_history = format_conversation_history(conversation_history) or "No prior conversation."
     invalid_message = get_invalid_query_message(query)
     if invalid_message:
@@ -234,16 +249,18 @@ def process_user_query(
             output_guardrail="SAFE",
         )
 
-    category = _rule_based_classifier(query)
+    category = _rule_based_classifier(effective_query)
     if has_llm_credentials():
         try:
             input_classifier_chain = build_input_classifier_chain()
-            category = _normalize_category(input_classifier_chain.invoke({"query": query}))
+            category = _normalize_category(
+                input_classifier_chain.invoke({"query": effective_query})
+            )
         except Exception as exc:
             if not _is_transient_llm_error(exc):
                 raise
 
-    clarification = needs_flight_clarification(query, category)
+    clarification = needs_flight_clarification(effective_query, category)
     if clarification:
         return QueryResult(
             response=clarification,
@@ -258,23 +275,25 @@ def process_user_query(
     if category == "Need SQL":
         try:
             if has_llm_credentials():
-                raw_response, generated_sql = run_flight_query_agent(query, chat_history)
+                raw_response, generated_sql = run_flight_query_agent(
+                    effective_query, chat_history
+                )
             else:
-                raw_response, generated_sql = run_sql_fallback(query)
+                raw_response, generated_sql = run_sql_fallback(effective_query)
         except Exception as exc:
             if _is_transient_llm_error(exc):
-                raw_response, generated_sql = run_sql_fallback(query)
+                raw_response, generated_sql = run_sql_fallback(effective_query)
             else:
                 raise
     elif category == "Non SQL":
         try:
             if has_llm_credentials():
-                raw_response = invoke_rag_chain(query, chat_history)
+                raw_response = invoke_rag_chain(effective_query, chat_history)
             else:
-                raw_response = run_rag_fallback(query)
+                raw_response = run_rag_fallback(effective_query)
         except Exception as exc:
             if _is_transient_llm_error(exc):
-                raw_response = run_rag_fallback(query)
+                raw_response = run_rag_fallback(effective_query)
             else:
                 raise
     else:

@@ -35,7 +35,8 @@ SQL_AGENT_PROMPT = f"""{ASSISTANT_CORE}
 
 You are helping with real-time flight lookups.
 Use the sql_db_tool to fetch data, then summarize it clearly for the customer.
-If the user's request is too vague to query, ask for the flight number, route, or travel date before querying.
+If the user's request is too vague to query safely, ask for the flight number, route, or travel date before querying.
+When prior conversation messages are provided, use them to interpret follow-up answers such as a flight number or route.
 """
 
 RAG_SYSTEM_PROMPT = f"""{ASSISTANT_CORE}

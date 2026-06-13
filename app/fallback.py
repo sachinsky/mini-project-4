@@ -1,19 +1,9 @@
 import re
 from datetime import datetime
 
+from .city_codes import is_route_skip_word, resolve_city
 from .query_validation import NO_CRITERIA_MESSAGE, get_unsupported_field_message
 from .sql_executor import execute_sql_query
-
-_CITY_TO_CODE = {
-    "delhi": "DEL",
-    "mumbai": "BOM",
-    "bengaluru": "BLR",
-    "bangalore": "BLR",
-    "chennai": "MAA",
-    "hyderabad": "HYD",
-    "nagpur": "NAG",
-    "goa": "GOI",
-}
 
 
 def _extract_flight_number(query: str) -> str | None:
@@ -21,18 +11,87 @@ def _extract_flight_number(query: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _resolve_place(place: str) -> str | None:
+    return resolve_city(place)
+
+
+def _extract_route_pair(query: str) -> tuple[str | None, str | None]:
+    lowered = query.lower()
+
+    match = re.search(r"from\s+([a-zA-Z]+)\s+to\s+([a-zA-Z]+)", lowered)
+    if match:
+        origin, dest = _resolve_place(match.group(1)), _resolve_place(match.group(2))
+        if origin and dest:
+            return origin, dest
+
+    match = re.search(r"to\s+([a-zA-Z]+)\s+from\s+([a-zA-Z]+)", lowered)
+    if match:
+        origin, dest = _resolve_place(match.group(2)), _resolve_place(match.group(1))
+        if origin and dest:
+            return origin, dest
+
+    match = re.search(r"\broute\s+([a-zA-Z]+)\s+to\s+([a-zA-Z]+)\b", lowered)
+    if match:
+        origin, dest = _resolve_place(match.group(1)), _resolve_place(match.group(2))
+        if origin and dest:
+            return origin, dest
+
+    for match in re.finditer(r"\b([a-zA-Z]+)\s+to\s+([a-zA-Z]+)\b", lowered):
+        word1, word2 = match.group(1), match.group(2)
+        if is_route_skip_word(word1) or is_route_skip_word(word2):
+            continue
+        origin, dest = _resolve_place(word1), _resolve_place(word2)
+        if origin and dest:
+            return origin, dest
+
+    return None, None
+
+
 def _extract_airport_code(query: str, direction: str) -> str | None:
+    origin, destination = _extract_route_pair(query)
+    if direction == "origin" and origin:
+        return origin
+    if direction == "destination" and destination:
+        return destination
+
     lowered = query.lower()
     if direction == "origin":
         match = re.search(r"from\s+([a-zA-Z]+)", lowered)
+        if not match and re.search(r"\b(next|upcoming|earliest)\s+flight\b", lowered):
+            match = re.search(r"\b(?:for|at|in)\s+([a-zA-Z]+)\b", lowered)
     else:
         match = re.search(r"to\s+([a-zA-Z]+)", lowered)
     if not match:
         return None
-    place = match.group(1).lower()
-    if len(place) == 3 and place.isalpha():
-        return place.upper()
-    return _CITY_TO_CODE.get(place)
+    return _resolve_place(match.group(1))
+
+
+def _is_next_flight_query(query: str) -> bool:
+    return bool(re.search(r"\b(next|upcoming|earliest)\s+flight\b", query, re.IGNORECASE))
+
+
+def has_sufficient_sql_criteria(query: str) -> bool:
+    """Return True when the query has enough detail to run a focused flight lookup."""
+    if _extract_flight_number(query):
+        return True
+
+    origin, destination = _extract_route_pair(query)
+    origin = origin or _extract_airport_code(query, "origin")
+    destination = destination or _extract_airport_code(query, "destination")
+    date = _extract_date(query)
+
+    if origin and destination:
+        return True
+    if origin and date:
+        return True
+    if destination and date:
+        return True
+    if _is_next_flight_query(query) and (origin or destination):
+        return True
+    if origin or destination:
+        return True
+
+    return False
 
 
 def _extract_date(query: str) -> str | None:
@@ -76,6 +135,13 @@ def generate_sql_fallback(query: str) -> str | None:
 
     if clauses:
         where = " AND ".join(clauses)
+        if _is_next_flight_query(query):
+            return (
+                f"SELECT * FROM flights WHERE {where} "
+                "AND (departure_date > CURRENT_DATE OR "
+                "(departure_date = CURRENT_DATE AND departure_time > CURRENT_TIME)) "
+                "ORDER BY departure_date ASC, departure_time ASC LIMIT 1;"
+            )
         return f"SELECT * FROM flights WHERE {where} LIMIT 10;"
 
     return None

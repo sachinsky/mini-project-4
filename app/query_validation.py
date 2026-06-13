@@ -37,6 +37,11 @@ _SQL_KEYWORDS = {
     "ilike", "between", "order", "by", "asc", "desc", "limit", "offset", "as",
     "distinct", "count", "sum", "avg", "min", "max", "lower", "upper", "true", "false",
     "flights", "on", "join", "inner", "left", "right", "group", "having",
+    # SQL date/time functions and expressions (not table columns)
+    "current_date", "current_time", "current_timestamp", "now", "localtime",
+    "localtimestamp", "date", "time", "timestamp", "datetime", "interval",
+    "cast", "extract", "coalesce", "case", "when", "then", "else", "end",
+    "exists", "any", "all", "union", "except", "intersect", "with",
 }
 
 PNR_NOT_SUPPORTED_MESSAGE = (

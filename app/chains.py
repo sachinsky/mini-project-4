@@ -154,9 +154,15 @@ sql_gen_prompt = ChatPromptTemplate.from_messages(
         3. Use ILIKE for flight number matching.
         4. Handle dates in 'YYYY-MM-DD' format.
         5. For city names, map to airport codes when possible (Delhi=DEL, Mumbai=BOM,
-           Bengaluru=BLR, Chennai=MAA, Hyderabad=HYD, Nagpur=NAG, Goa=GOI).
+           Bengaluru=BLR, Chennai=MAA, Hyderabad=HYD, Kolkata=CCU, Pune=PNQ,
+           Nagpur=NAG, Goa=GOI, Ahmedabad=AMD, Kochi=COK, Jaipur=JAI, Patna=PAT,
+           Varanasi=VNS, Chandigarh=IXC).
         6. Never query PNR, booking reference, passenger name, or customer data.
         7. Never return unfiltered results (no bare SELECT * FROM flights without WHERE).
+        8. For "next" or "upcoming" flights, treat "for/at/in <city>" as departing from
+           that city (origin), compare against CURRENT_DATE and CURRENT_TIME, ORDER BY
+           departure_date ASC, departure_time ASC, and LIMIT 1.
+        9. You may use CURRENT_DATE, CURRENT_TIME, and standard SQL date/time functions.
       """,
         ),
         ("human", "{query}"),
