@@ -132,6 +132,68 @@ streamlit run streamlit_app.py
 streamlit run dashboard_app.py --server.port 8502
 ```
 
+## Docker setup
+
+Build the Docker image from the project root:
+
+```bash
+docker build -t mini-project-4 .
+```
+
+Run the container:
+
+```bash
+docker run --rm --env-file .env -p 8000:8000 -p 8501:8501 -p 8502:8502 mini-project-4
+```
+
+Check whether the container is running:
+
+```bash
+docker ps
+```
+
+Review the container logs:
+
+```bash
+docker logs <container_name_or_id>
+```
+
+Verify the application is responding:
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8501/
+curl http://localhost:8502/
+```
+
+Then open:
+
+- Backend API docs: http://localhost:8000/docs
+- Streamlit UI: http://localhost:8501
+- Analytics dashboard: http://localhost:8502
+
+### Push the image to Docker Hub
+
+Create or reuse a Docker Hub Personal Access Token, then log in:
+
+```bash
+docker login
+```
+
+Tag the image with your Docker Hub username:
+
+```bash
+docker tag mini-project-4:latest YOUR_DOCKERHUB_USERNAME/mini-project-4:latest
+```
+
+Push the tagged image:
+
+```bash
+docker push YOUR_DOCKERHUB_USERNAME/mini-project-4:latest
+```
+
+Confirm the image is available in Docker Hub by opening your repository page in the browser.
+
 ## Analytics API
 
 **Summary**
