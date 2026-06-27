@@ -172,6 +172,18 @@ Then open:
 - Streamlit UI: http://localhost:8501
 - Analytics dashboard: http://localhost:8502
 
+### End-to-end Docker workflow
+
+If you want to build, run, and publish the image in one sequence, use:
+
+```bash
+docker build -t mini-project-4 .
+docker run --rm --env-file .env -p 8000:8000 -p 8501:8501 -p 8502:8502 mini-project-4
+docker login
+docker tag mini-project-4:latest YOUR_DOCKERHUB_USERNAME/mini-project-4:latest
+docker push YOUR_DOCKERHUB_USERNAME/mini-project-4:latest
+```
+
 ### Push the image to Docker Hub
 
 Create or reuse a Docker Hub Personal Access Token, then log in:
